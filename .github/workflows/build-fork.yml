@@ -67,6 +67,16 @@ jobs:
           cp UPSTREAM_COMMIT.txt artifacts/UPSTREAM_COMMIT.txt
           cat artifacts/SHA256SUMS.txt
 
+      - name: Package complete patched source ZIP
+        run: |
+          set -euo pipefail
+          python3 build-tools/package_source.py
+          VERSION=$(tr -d '[:space:]' < build-tools/VERSION)
+          SOURCE_ZIP="artifacts/Warext-Server-Engine-${VERSION}-source.zip"
+          test -s "$SOURCE_ZIP"
+          sha256sum artifacts/Warext-Server-Engine-26.3.jar "$SOURCE_ZIP" > artifacts/SHA256SUMS.txt
+          cat artifacts/SHA256SUMS.txt
+
       - name: Smoke test balanced and extreme profiles
         run: |
           set -euo pipefail
@@ -536,18 +546,28 @@ jobs:
           VERSION=$(tr -d '[:space:]' < build-tools/VERSION)
           TAG="v$VERSION"
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping duplicate publication."
-            exit 0
-          fi
+          SOURCE_ZIP="artifacts/Warext-Server-Engine-${VERSION}-source.zip"
+          test -s "$SOURCE_ZIP"
+          test -s artifacts/Warext-Server-Engine-26.3.jar
 
-          gh release create "$TAG" \
-            artifacts/Warext-Server-Engine-26.3.jar \
-            artifacts/SHA256SUMS.txt \
-            artifacts/UPSTREAM_COMMIT.txt \
-            --title "Warext Server Engine $VERSION" \
-            --notes-file RELEASE_NOTES.md \
-            --prerelease
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; updating its JAR and full-source ZIP assets."
+            gh release upload "$TAG" \
+              artifacts/Warext-Server-Engine-26.3.jar \
+              "$SOURCE_ZIP" \
+              artifacts/SHA256SUMS.txt \
+              artifacts/UPSTREAM_COMMIT.txt \
+              --clobber
+          else
+            gh release create "$TAG" \
+              artifacts/Warext-Server-Engine-26.3.jar \
+              "$SOURCE_ZIP" \
+              artifacts/SHA256SUMS.txt \
+              artifacts/UPSTREAM_COMMIT.txt \
+              --title "Warext Server Engine $VERSION" \
+              --notes-file RELEASE_NOTES.md \
+              --prerelease
+          fi
 
 
       - name: Verify published JAR asset
@@ -557,7 +577,15 @@ jobs:
         run: |
           VERSION=$(tr -d '[:space:]' < build-tools/VERSION)
           TAG="v$VERSION"
-          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "Warext-Server-Engine-26.3.jar" || {
-            echo "Release $TAG is missing Warext-Server-Engine-26.3.jar"
-            exit 1
-          }
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          for FILE in \
+            Warext-Server-Engine-26.3.jar \
+            "Warext-Server-Engine-${VERSION}-source.zip" \
+            SHA256SUMS.txt \
+            UPSTREAM_COMMIT.txt; do
+            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$FILE"; then
+              echo "Release $TAG is missing $FILE"
+              exit 1
+            fi
+          done
+          echo "Verified JAR, full-source ZIP, checksums, and upstream metadata for $TAG."
