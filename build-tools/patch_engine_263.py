@@ -3403,6 +3403,93 @@ replace_once(
 
 print("Stage 17: reusable tracker Future/join arrays applied.")
 
+# 44) Async Entity Tracker 2.0: reduce retained references and pathological
+# packet-buffer capacities without adding new per-tick allocations.
+#
+# The snapshot array is deliberately reused. When entity count falls, references
+# beyond the active slice must be released; otherwise entities from unloaded
+# chunks can remain reachable through the tracker indefinitely. Only clear the
+# shrunken tail (or all live refs when the entity count falls to zero), so a
+# steady high-entity server never pays for a second full array pass.
+replace_once(
+    async_tracker,
+    """    private Entity[] trackerSnapshot = new Entity[0];
+    private final java.util.ArrayDeque<TrackerCtx> trackerCtxPool""",
+    """    private Entity[] trackerSnapshot = new Entity[0];
+    private int warext$previousSnapshotSize;
+    private final java.util.ArrayDeque<TrackerCtx> trackerCtxPool""",
+    "tracker snapshot active-reference accounting",
+)
+
+replace_once(
+    async_tracker,
+    """        int len = entities.size();
+        if (len == 0) {
+            return;
+        }""",
+    """        int len = entities.size();
+        if (len == 0) {
+            if (this.warext$previousSnapshotSize != 0) {
+                java.util.Arrays.fill(this.trackerSnapshot, 0, this.warext$previousSnapshotSize, null);
+                this.warext$previousSnapshotSize = 0;
+            }
+            return;
+        }""",
+    "tracker empty-world retained entity reference cleanup",
+)
+
+replace_once(
+    async_tracker,
+    """        Entity[] raw = this.trackerSnapshot;
+        System.arraycopy(entities.getRawDataUnchecked(), 0, raw, 0, len);
+
+        ThreadPool exec""",
+    """        Entity[] raw = this.trackerSnapshot;
+        System.arraycopy(entities.getRawDataUnchecked(), 0, raw, 0, len);
+        if (len < this.warext$previousSnapshotSize) {
+            // The reused backing array must not pin entities removed last tick.
+            // No extra work in the common stable-size / growing-entity cases.
+            java.util.Arrays.fill(raw, len, this.warext$previousSnapshotSize, null);
+        }
+        this.warext$previousSnapshotSize = len;
+
+        ThreadPool exec""",
+    "tracker shrinking-snapshot tail reference release",
+)
+
+# A single mass-spawn/network burst may grow a packet list to thousands of
+# slots. Pooling that oversized array forever is counterproductive. Recycle
+# normal-size arrays, discard unusually large backing arrays after sending and
+# clearing packets. The system property is an optional override, not a CPU/RAM
+# hardware assumption.
+replace_once(
+    tracker_ctx,
+    """    private static final int PACKET_LIST_POOL_LIMIT = 64;""",
+    """    private static final int PACKET_LIST_POOL_LIMIT = 64;
+    private static final int PACKET_LIST_RETAIN_CAPACITY = Math.max(
+        16, Math.min(4096, Integer.getInteger("warext.tracker.packet-list-retain-capacity", 256))
+    );""",
+    "tracker bounded packet-buffer retained capacity",
+)
+
+replace_once(
+    tracker_ctx,
+    """            list.clear();
+            if (this.packetListPool.size() < PACKET_LIST_POOL_LIMIT) {
+                this.packetListPool.addLast(list);
+            }""",
+    """            list.clear();
+            // Do not permanently retain burst-grown arrays in every tracker context.
+            // elements().length is O(1), unlike re-sizing or copying a packet list.
+            if (list.elements().length <= PACKET_LIST_RETAIN_CAPACITY
+                && this.packetListPool.size() < PACKET_LIST_POOL_LIMIT) {
+                this.packetListPool.addLast(list);
+            }""",
+    "tracker oversized packet-list retention guard",
+)
+print("Stage 44: tracker snapshot shrink cleanup and bounded packet-list retention applied.")
+
+
 
 # 30) Light packet ThreadLocal retention cleanup.
 # The reusable ThreadLocal buffers must not retain DataLayer byte[] references after the packet
