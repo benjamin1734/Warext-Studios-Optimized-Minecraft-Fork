@@ -1,19 +1,24 @@
-# Warext Server Engine 26.3 exp.21
+# Warext Server Engine 26.3 exp.22
 
-Experimental Leaf 26.3 build #4 integration candidate (GitHub-only).
+Experimental Minecraft 26.3 performance and correctness update on Leaf build #4.
 
-## Leaf upstream synchronization (2026-10-15)
-- Advance pinned Leaf `ver/26.3` source from `0edc7f3b7d79b0e2e16a0ed1df8278c02c73537f` to `4b0dcd264996f18b48f783c58390a9090ba1964b` (#954).
-- Bring the new Paper base `f68a55a8964e02b11a0951b971951963da5f0276` and upstream's patch adaptations into the source used by the Warext patch layer.
-- Upstream archived the superseded C2ME Beardifier worldgen and Lithium hash-palette patches because equivalent functionality now comes through Paper/Moonrise. These optimizations are not blindly re-applied.
-- Keep Warext-specific adaptive scheduling, p99-latency measures, pregeneration path, and optional Moonrise ticking cache; no fixed 4-core/6-GB assumptions.
-- Java 25 remains the required build and smoke-test runtime; this is a 26.3 prerelease, not a new stable Minecraft version.
+## Fair async-save scheduling
+- Previously a continuously updated world/player could drain all its coalesced snapshots in one I/O worker turn, starving unrelated save keys under sustained load.
+- The scheduler now executes **one write snapshot per queue turn** and re-enqueues the newest pending snapshot at the tail of the I/O queue. This provides fairness across players and worlds without changing per-key serialization, latest-snapshot coalescing or the completion future used by load/backup ordering.
+- Rejected reschedules are logged and fail the completion future instead of leaving a key silently stuck as scheduled.
+- Added an independent **real Java scheduler** smoke test: 1,000 superseded writes coalesce into one pending snapshot; a cold player's save runs before that latest hot snapshot; a failed task does not poison the worker; two I/O workers never overlap writes for the same key.
+- Preserve the configurable hardware-neutral I/O worker budget. No fixed CPU/RAM assumptions.
 
-## Release verification gates
-- Fetch and verify the exact pinned Leaf upstream commit.
-- Apply Leaf/Paper patch stack followed by the Warext performance layer.
-- Build runnable Paperclip JAR, bundle the patched Java source ZIP on GitHub Actions, validate SHA-256 checksums.
-- Run balanced/extreme/pregeneration/compatibility startup smoke checks, worldgen save/reload checks, and opt-in ticking-cache parity tests.
-- Publish both the runnable JAR and complete source ZIP to GitHub Releases **only when the main-branch workflow succeeds**.
+## Upstream and compatibility
+- Remains pinned to Leaf 26.3 build #4, commit `4b0dcd264996f18b48f783c58390a9090ba1964b`.
+- Retains exp.21 Paper/Moonrise `PalettedContainer.read` anti-xray compatibility fix.
+- The JAR and complete patched Java source are produced and published through GitHub Actions only.
 
-**Status:** Experimental integration. Do not treat the feature-branch comparison itself as proof of build, runtime correctness, benchmark gains or production readiness.
+## Release validation
+- Apply exact pinned Leaf/Paper patch stack followed by all Warext patches.
+- Compile and run the Java async-save fairness/concurrency regression test directly against the **generated Java source**.
+- Build runnable Java 25 Paperclip JAR, package the complete modified source tree on GitHub Actions and check SHA256 sums.
+- Run balanced, extreme, pregeneration, compatibility, worldgen/save-reload, optional ticking-cache, and lazy container server smoke tests.
+- Publish exp.22 assets to GitHub Releases only after main workflow success.
+
+**Performance claim:** The fairness test proves deterministic I/O queue ordering and per-key isolation under its synthetic workload; it does not establish a universal TPS/MSPT uplift.
