@@ -1,24 +1,29 @@
-# Warext Server Engine 26.3 exp.24
+# Warext Server Engine 26.3 exp.25
 
-Experimental high-load Entity Tracker allocation and memory-retention update based on Leaf 26.3 build #4.
+Experimental performance update on the Leaf 26.3 Build #4 base. This release groups improvements in **three different core subsystems** rather than using one version for one minor change.
 
-## Entity Tracker 2.0: avoid retaining unloaded entities
-- The asynchronously processed `trackerSnapshot` entity array is reused to avoid allocations on every tracking tick.
-- Prior to this update, elements beyond the currently active slice were never cleared after the world entity count decreased. That allowed removed/unloaded entities to remain strongly referenced through the reusable array.
-- The tracker now records the previously active snapshot length and clears **only the stale tail when entity count shrinks**. At zero entities it clears the previous active slice once.
-- Does not add work to the stable-size and growing-entity fast paths, and does not change how the worker reads the active entity range.
-- Snapshot arrays still reuse capacity to avoid full-size allocations on every tick.
+## 1. Entity Tracker — allocation stability across variable entity counts
+- Future and join-context arrays now grow geometrically only when their **capacity** is insufficient, instead of being reallocated every time the entity task count changes.
+- Existing `futureCount` is authoritative: reused over-capacity Future arrays never schedule or join inactive slots.
+- `TrackerCtx.handle` takes an explicit active joined-context count and flushes only populated entries rather than iterating the full allocated capacity.
+- After handling, only the active joined-context references are cleared; reused arrays do not pin entity tracker contexts, and capacity is retained for future ticks.
+- Existing exp.24 snapshot tail cleanup and bounded packet-list retention remain enabled.
 
-## Bounded packet-list retention
-- Each TrackerCtx pools previously used per-connection packet lists.
-- Burst-heavy ticks can grow an individual ObjectArrayList backing array far beyond usual packet counts. Reusing an oversized backing array indefinitely retains unnecessary memory.
-- Packet batches with a backing capacity larger than `-Dwarext.tracker.packet-list-retain-capacity=N` (default 256, bounded to 16..4096) are **discarded from the reuse pool after send and clear**; normally sized batches are still pooled.
-- Existing per-context pool limit (64 packet lists) is retained. No extra copies are made in the send path.
+## 2. ChunkCache — cold sparse clear memory and CPU policy
+- The existing hot chunk removal path stays **free of shrink rehashes**, preserving protection from sudden mass-unload p99 spikes.
+- An explicit `ChunkCache.clear()` when table capacity exceeds eight times its initial capacity **and** fewer than half of initial-capacity entries remain reclaims the oversized key/value arrays.
+- This replaces an O(huge capacity) clear on sparse maps with freshly allocated initial-capacity arrays; normal dense clears keep the capacity to avoid excessive shrink/regrow cycles.
+- The single-entry cache and null-key flags are invalidated as before.
 
-## Delivery / constraints
-- Inherit Leaf 26.3 build #4 with pinned upstream commit `4b0dcd264996f18b48f783c58390a9090ba1964b` and the unchanged exp.23 O(1) NodeEvaluator pool and exp.22 fair save queue.
-- No assumptions about a particular host's CPU or RAM.
-- **No additional benchmark suite or new test code in this development step.** Existing mandatory GitHub Actions compile, smoke, source package and release gates stay in place.
-- Publish runnable Paperclip JAR and complete patched-source ZIP only through GitHub Releases after main branch CI success.
+## 3. Async Pathfinding — bounded saturation diagnostic cost
+- Replace a non-atomic shared warning timestamp with a monotonic `System.nanoTime()`-based AtomicLong CAS gate.
+- Under concurrent executor queue saturation, emit at most one warning per 30-second interval across worker/caller threads instead of redundant logging.
+- Preserve existing queue bounds, worker budget, user-configured rejection policy and path execution semantics.
 
-**Expected effect:** reduced retained heap after large entity/packet bursts, not a guaranteed higher TPS; no controlled Leaf comparison has been measured.
+## Delivery and compatibility
+- Keep pinned upstream Leaf Build #4 (`4b0dcd264996f18b48f783c58390a9090ba1964b`), the exp.23 O(1) evaluator pool, exp.22 async-save fairness, and exp.24 tracker memory improvements.
+- No fixed CPU count or heap size is assumed.
+- No new benchmark/test suites were developed for this release at the user's request. Existing GitHub Actions build and smoke gates remain mandatory.
+- On successful CI, publish **runnable JAR and full patched Java source** via GitHub Releases only.
+
+The changes reduce identifiable allocation and logging costs. No numeric MSPT/TPS/RAM improvement is claimed without controlled comparative measurements.
