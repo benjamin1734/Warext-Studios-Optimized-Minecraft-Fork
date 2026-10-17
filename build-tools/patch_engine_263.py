@@ -3526,6 +3526,45 @@ replace_once(
 )
 print("Stage 45: CAS-limited pathfinding saturation warning applied.")
 
+# 46) ChunkCache: reclaim unusually large stale arrays on sparse explicit
+# clear() without causing hash-table rehash spikes during regular chunk removal.
+# Array fill is O(capacity), even if only a handful of chunks remain.
+# Clear() is a cold reset boundary, so rebuilding the initial capacity here
+# is safe and avoids walking huge mostly empty backing arrays.
+chunk_cache = "leaf-server/src/main/java/org/dreeam/leaf/world/ChunkCache.java"
+replace_once(
+    chunk_cache,
+    """        if (size == 0) return;
+        size = 0;
+        containsNullKey = false;
+        Arrays.fill(key, (0));
+        Arrays.fill(value, null);""",
+    """        // Shrink only at explicit sparse clear boundaries, never on hot-path
+        // remove(): mass unloading otherwise incurs p99 rehash spikes.
+        // Keep large capacity across normal clears while still actively dense,
+        // avoiding repetitive shrink/regrow for large working sets.
+        if (this.n >= MIN_N * 8 && this.size <= MIN_N / 2) {
+            this.size = 0;
+            this.containsNullKey = false;
+            this.n = MIN_N;
+            this.mask = MIN_N - 1;
+            this.maxFill = HashCommon.maxFill(MIN_N, FACTOR);
+            this.key = new long[MIN_N + 1];
+            @SuppressWarnings("unchecked")
+            final V[] freshValues = (V[]) new Object[MIN_N + 1];
+            this.value = freshValues;
+            return;
+        }
+        if (size == 0) return;
+        size = 0;
+        containsNullKey = false;
+        Arrays.fill(key, (0));
+        Arrays.fill(value, null);""",
+    "chunk cache cold sparse-clear capacity reclaim",
+)
+print("Stage 46: chunk cache sparse clear avoids O(huge capacity) fills and stale retained memory.")
+
+
 
 
 
