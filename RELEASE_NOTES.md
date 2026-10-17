@@ -1,26 +1,24 @@
-# Warext Server Engine 26.3 exp.23
+# Warext Server Engine 26.3 exp.24
 
-Experimental performance maintenance on Leaf 26.3 build #4 (Paper/Moonrise), keeping the proven exp.22 async-save fairness scheduling.
+Experimental high-load Entity Tracker allocation and memory-retention update based on Leaf 26.3 build #4.
 
-## Constant-time, bounded async pathfinder evaluator pooling
-- Replaced an **O(n)** `ConcurrentLinkedQueue.size()` call in the hot `NodeEvaluatorCache.returnNodeEvaluator` path with an **O(1)** atomic retained-slot counter per generator/feature pool.
-- Use compare-and-set to reserve storage before offering a returned evaluator. Concurrent borrowers decrement after successful dequeue.
-- Keep the previous dynamic retained-pool cap: explicit `-Dwarext.pathfinding.evaluator-pool-cap=N` clamped 1..128; otherwise the worker-adjusted range of 4..32.
-- Preserve generator **identity** and evaluator feature isolation. Never introduce a global lock, ThreadLocal evaluator pool, or per-checkout expensive pool walks.
-- Drop surplus evaluators from burst pathfinding rather than retaining more than the configured memory budget.
-- Concurrent operations may briefly reserve a slot before queue insertion; this is a safe bounded-reuse tradeoff rather than a performance guarantee.
+## Entity Tracker 2.0: avoid retaining unloaded entities
+- The asynchronously processed `trackerSnapshot` entity array is reused to avoid allocations on every tracking tick.
+- Prior to this update, elements beyond the currently active slice were never cleared after the world entity count decreased. That allowed removed/unloaded entities to remain strongly referenced through the reusable array.
+- The tracker now records the previously active snapshot length and clears **only the stale tail when entity count shrinks**. At zero entities it clears the previous active slice once.
+- Does not add work to the stable-size and growing-entity fast paths, and does not change how the worker reads the active entity range.
+- Snapshot arrays still reuse capacity to avoid full-size allocations on every tick.
 
-## Regression test
-- Added a GitHub Actions test that uses `javac` to compile the **real generated patched** `NodeEvaluatorCache.java` against minimal API stubs and runs:
-  - 64 simultaneously checked-out evaluators and exact bounded retention at cap=4.
-  - Generator identity / feature-bit reuse isolation.
-  - Double-return and removed-object rejection.
-  - 12-worker, 18,000-operation simultaneous take/return stress, no duplicate checkouts, and counter/queue parity at quiescence.
-- Re-run exp.22 async save ordering/fairness Java regression, full Paperclip Java 25 build and existing startup, worldgen, and save/reload smoke tests.
+## Bounded packet-list retention
+- Each TrackerCtx pools previously used per-connection packet lists.
+- Burst-heavy ticks can grow an individual ObjectArrayList backing array far beyond usual packet counts. Reusing an oversized backing array indefinitely retains unnecessary memory.
+- Packet batches with a backing capacity larger than `-Dwarext.tracker.packet-list-retain-capacity=N` (default 256, bounded to 16..4096) are **discarded from the reuse pool after send and clear**; normally sized batches are still pooled.
+- Existing per-context pool limit (64 packet lists) is retained. No extra copies are made in the send path.
 
-## Release
-- Pinned upstream: Leaf 26.3 build #4, `4b0dcd264996f18b48f783c58390a9090ba1964b`.
-- No fixed CPU or RAM assumptions.
-- Source and JAR are built, tested and published **only on GitHub Actions**; no user-side ZIP files.
+## Delivery / constraints
+- Inherit Leaf 26.3 build #4 with pinned upstream commit `4b0dcd264996f18b48f783c58390a9090ba1964b` and the unchanged exp.23 O(1) NodeEvaluator pool and exp.22 fair save queue.
+- No assumptions about a particular host's CPU or RAM.
+- **No additional benchmark suite or new test code in this development step.** Existing mandatory GitHub Actions compile, smoke, source package and release gates stay in place.
+- Publish runnable Paperclip JAR and complete patched-source ZIP only through GitHub Releases after main branch CI success.
 
-**Measurement:** This removes an algorithmically linear operation and validates concurrency correctness, but does not prove a specific MSPT improvement relative to Leaf without controlled benchmarks.
+**Expected effect:** reduced retained heap after large entity/packet bursts, not a guaranteed higher TPS; no controlled Leaf comparison has been measured.

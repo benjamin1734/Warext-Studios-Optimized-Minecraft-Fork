@@ -5,7 +5,7 @@ High-performance Minecraft server engine focused on low MSPT, low p95/p99 tick l
 ## Current target
 - Minecraft line: 26.3
 - Java: 25
-- Release line: `26.3-exp.23` (only GitHub Actions validated builds are published)
+- Release line: `26.3-exp.24` (only GitHub Actions validated builds are published)
 - Goal: minimize MSPT, p95/p99 tick latency, CPU time per tick, allocation/GC pressure and RAM use while preserving broad Paper ecosystem compatibility.
 
 ## Performance profiles
@@ -61,6 +61,7 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 - Shared CPU budgeting across async systems.
 - NodeEvaluator generator/feature isolation with a bounded, constant-time atomic retention counter (eliminates O(n) concurrent-queue size checks in the hot return path).
 - Async entity-tracker context, snapshot, packet-buffer and interpolation allocation reductions.
+- Release stale entity references on snapshot shrink and avoid retaining unusually large packet-list backing arrays after burst-heavy ticks. Override with `-Dwarext.tracker.packet-list-retain-capacity=N` (default 256, minimum 16, maximum 4096).
 - Fair async save coalescing: one write per I/O queue turn keeps busy world/player saves from starving unrelated player/world keys; off-thread NBT compression retained.
 - Async mob-spawn failure recovery.
 - Entity activation/despawn/natural-spawn spatial lookup allocation reductions.
