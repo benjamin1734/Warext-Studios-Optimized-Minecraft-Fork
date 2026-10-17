@@ -195,6 +195,10 @@ jobs:
                 exit 1
               }
 
+              # Check only diagnostics emitted by the actual End worldgen action.
+              # An unrelated startup/authlib Microsoft/Mojang HTTP 429 during CI
+              # must not be confused with a worldgen exception.
+              PREG_SMOKE_START=$(wc -l < server.log)
               # Exercise real End worldgen outside the central-island fast path so the
               # erosion-based biome resolver and Warext cache are used.
               echo "execute in minecraft:the_end run forceload add 2048 2048" >&3
@@ -206,7 +210,7 @@ jobs:
               }
               echo "save-all flush" >&3
               sleep 4
-              if grep -Eiq "Exception|Failed to load|Failed to save|worldgen.*error|biome.*error|TheEndBiome.*error" server.log; then
+              if tail -n "+$((PREG_SMOKE_START + 1))" server.log | grep -Eiq "Exception|Failed to load|Failed to save|worldgen.*error|biome.*error|TheEndBiome.*error"; then
                 echo "End worldgen smoke emitted an error"
                 cat server.log
                 exit 1
