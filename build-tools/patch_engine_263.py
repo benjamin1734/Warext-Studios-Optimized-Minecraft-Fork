@@ -4930,8 +4930,38 @@ compact_replacement = """            newData.palette.read(buffer, this.strategy.
             }
 
             this.updateData(this.data); // Paper - optimise palette reads"""
+# Paper 26.3 #954 moved the post-read step from updateData(...) to
+# addPresetValues(). Keep anti-xray preset insertion AFTER Warext's logically
+# lossless uniform-storage compaction, regardless of the upstream variant.
+old_palette_tail = "            this.updateData(this.data); // Paper - optimise palette reads"
+new_palette_tail = (
+    "            this.addPresetValues(); // Paper - Anti-Xray - Add preset values "
+    "(inefficient, but this isn't used by the server)"
+)
 if data.count(compact_anchor) != 1:
-    raise RuntimeError(f"PalettedContainer compact storage anchor: expected 1 match, got {data.count(compact_anchor)}")
+    current_palette_anchor = compact_anchor.replace(old_palette_tail, new_palette_tail)
+    if data.count(current_palette_anchor) == 1:
+        compact_anchor = current_palette_anchor
+        compact_replacement = compact_replacement.replace(old_palette_tail, new_palette_tail)
+
+if data.count(compact_anchor) != 1:
+    # Fail closed while exposing the generated Paper/Moonrise read method for safe adaptation.
+    lines = data.splitlines()
+    anchors = [
+        i for i, line in enumerate(lines)
+        if ("newData.palette.read" in line or "newData.storage.getRaw" in line
+            or "updateData(this.data)" in line or "readFixedSizeLongArray" in line)
+    ]
+    windows = []
+    for i in anchors[:12]:
+        lo = max(0, i - 12)
+        hi = min(len(lines), i + 17)
+        windows.append("\n".join(f"{j + 1}: {lines[j]}" for j in range(lo, hi)))
+    raise RuntimeError(
+        f"PalettedContainer compact storage anchor: expected 1 match, "
+        f"got {data.count(compact_anchor)}. Relevant source contexts:\n"
+        + "\n--- NEXT CONTEXT ---\n".join(windows)
+    )
 data = data.replace(compact_anchor, compact_replacement, 1)
 
 write(paletted, data)
