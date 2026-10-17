@@ -5,7 +5,7 @@ High-performance Minecraft server engine focused on low MSPT, low p95/p99 tick l
 ## Current target
 - Minecraft line: 26.3
 - Java: 25
-- Release line: `26.3-exp.21` (integration candidate; only GitHub Actions validated builds are published)
+- Release line: `26.3-exp.22` (only GitHub Actions validated builds are published)
 - Goal: minimize MSPT, p95/p99 tick latency, CPU time per tick, allocation/GC pressure and RAM use while preserving broad Paper ecosystem compatibility.
 
 ## Performance profiles
@@ -61,7 +61,7 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 - Shared CPU budgeting across async systems.
 - NodeEvaluator pool correctness and reduced contention.
 - Async entity-tracker context, snapshot, packet-buffer and interpolation allocation reductions.
-- Async save coalescing and off-thread NBT compression.
+- Fair async save coalescing: one write per I/O queue turn keeps busy world/player saves from starving unrelated player/world keys; off-thread NBT compression retained.
 - Async mob-spawn failure recovery.
 - Entity activation/despawn/natural-spawn spatial lookup allocation reductions.
 - Adaptive small-player linear nearest-player fast path.
@@ -75,7 +75,8 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 - Reusable packet-NBT DataOutput adapter to reduce per-object serialization allocation and GC pressure.
 - Reusable nearest-item sensor scratch storage, bulk modified-UTF packet encoding with bounded thread-local scratch memory, and hardware-adaptive path-burst protection. Brain-memory result lists remain freshly allocated to preserve reference semantics.
 - Balanced pathfinding scales steady/burst workers with the detected CPU budget and a bounded queue; no fixed CPU model or RAM size is assumed.
-- Runtime Java 25 startup/shutdown smoke tests for both balanced and extreme profiles.
+- Deterministic Java concurrency regression tests for async-save fairness, superseded-write coalescing, error recovery and per-key exclusion.
+- Runtime Java 25 startup/shutdown smoke tests for balanced, extreme, compatibility and pregeneration profiles.
 - Reproducible builds pinned to a tested upstream commit.
 - Release publishing is gated by balanced/extreme smoke tests and verifies that every versioned GitHub Release contains the runnable server JAR.
 
