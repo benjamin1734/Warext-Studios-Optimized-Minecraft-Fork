@@ -5,7 +5,7 @@ High-performance Minecraft server engine focused on low MSPT, low p95/p99 tick l
 ## Current target
 - Minecraft line: 26.3
 - Java: 25
-- Release line: `26.3-exp.25` (only GitHub Actions validated builds are published)
+- Release line: `26.3-exp.26` (only GitHub Actions validated builds are published)
 - Goal: minimize MSPT, p95/p99 tick latency, CPU time per tick, allocation/GC pressure and RAM use while preserving broad Paper ecosystem compatibility.
 
 ## Performance profiles
@@ -57,11 +57,12 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 
 ## Main optimization areas
 
-- Adaptive multi-core pathfinding.
-- Shared CPU budgeting across async systems.
+- Adaptive multi-core pathfinding, with preallocated bounded FIFO task queue storage (reduced per-task node allocations).
+- Shared CPU budgeting across async systems; background I/O headroom discounts optional async components disabled by the active performance profile.
 - NodeEvaluator generator/feature isolation with a bounded, constant-time atomic retention counter (eliminates O(n) concurrent-queue size checks in the hot return path).
 - Async entity-tracker context, snapshot, packet-buffer and interpolation allocation reductions.
 - Geometric reusable tracker Future/join buffers with active-count-only processing, avoiding per-tick array churn as entity task counts fluctuate.
+- Tracker context burst buffers reclaimed only after subsequent quiet ticks; configurable `-Dwarext.tracker.context-list-trim-threshold=N` (default 4096).
 - Release stale entity references on snapshot shrink and avoid retaining unusually large packet-list backing arrays after burst-heavy ticks. Override with `-Dwarext.tracker.packet-list-retain-capacity=N` (default 256, minimum 16, maximum 4096).
 - Fair async save coalescing: one write per I/O queue turn keeps busy world/player saves from starving unrelated player/world keys; off-thread NBT compression retained.
 - Async mob-spawn failure recovery.
