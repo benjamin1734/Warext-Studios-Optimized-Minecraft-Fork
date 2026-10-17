@@ -2,7 +2,7 @@ name: Build Warext Server Engine 26.3
 
 on:
   push:
-    branches: [ "main", "update/leaf-26.3-build4" ]
+    branches: [ "main", "development/async-save-fairness-exp22" ]
     paths:
       - "build-tools/**"
       - ".github/workflows/build-fork.yml"
@@ -52,6 +52,9 @@ jobs:
 
       - name: Apply Warext performance layer
         run: python3 build-tools/patch_engine_263.py upstream-src
+
+      - name: Verify async-save fairness and per-key save ordering
+        run: python3 build-tools/test_async_save_fairness.py
 
       - name: Build Paperclip JAR
         working-directory: upstream-src
