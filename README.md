@@ -5,7 +5,7 @@ High-performance Minecraft server engine focused on low MSPT, low p95/p99 tick l
 ## Current target
 - Minecraft line: 26.3
 - Java: 25
-- Release line: `26.3-exp.26` (only GitHub Actions validated builds are published)
+- Release line: `26.3-exp.26` (previous published release; all **future** JARs are built on a private local builder, with GitHub used solely for source and Release storage)
 - Goal: minimize MSPT, p95/p99 tick latency, CPU time per tick, allocation/GC pressure and RAM use while preserving broad Paper ecosystem compatibility.
 
 ## Performance profiles
@@ -53,7 +53,7 @@ The automatic scheduler reserves CPU headroom instead of letting every subsystem
 
 For offline world generation, select `-Dwarext.profile=pregeneration`; after generation return to a normal serving profile. The chunk worker budget automatically scales with available processing capacity, and explicit Paper/Moonrise worker settings are preserved.
 
-The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `performance.chunk.direct-ticking-set-lookups.enabled`. It requires a server restart when changed. CI runs it with an independent live-holder parity check, but this is not a substitute for long-running production workload testing.
+The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `performance.chunk.direct-ticking-set-lookups.enabled`. It requires a server restart when changed. Previously published CI builds checked it with an independent live-holder parity check; this is not a substitute for long-running production workload testing.
 
 ## Main optimization areas
 
@@ -82,21 +82,23 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 - Compile and stress-test the real patched Java NodeEvaluatorCache against simultaneous checkout/return, generator isolation and the configured retention cap.
 - Runtime Java 25 startup/shutdown smoke tests for balanced, extreme, compatibility and pregeneration profiles.
 - Reproducible builds pinned to a tested upstream commit.
-- Release publishing is gated by balanced/extreme smoke tests and verifies that every versioned GitHub Release contains the runnable server JAR.
+- Legacy startup smoke scripts remain available for local diagnosis; GitHub Actions no longer compiles or publishes Warext binaries.
 
-## Validation
+## Private local build and GitHub storage policy
 
-Every release build must:
-1. Fetch the pinned upstream source revision.
-2. Apply the upstream patch stack.
-3. Apply the Warext performance layer.
-4. Build the server JAR.
-5. Start a real server with Java 25.
-6. Reach the server `Done` state.
-7. Shut down cleanly.
-8. Pass both `balanced` and `extreme` profile smoke tests before publication.
+**GitHub is a repository and Releases artifact store only. No GitHub Actions/CI remote compilation or publishing is permitted.** Future versions must be incremented before publication; do not overwrite previously published JARs.
 
-Compilation and smoke tests prove build/runtime integrity; they do **not** prove a universal performance win on every workload. Real performance comparison should use p50/p95/p99 MSPT, CPU time/tick, allocation rate, GC pauses and heap use under the same workload.
+The private/offline-from-GitHub compilation environment needs **JDK 25+**, Git, Python 3, local Gradle wrapper support and an authenticated `gh` CLI for **uploading already compiled assets**. In a clean local clone of the source repository, use:
+
+```bash
+bash build-tools/build-local.sh publish
+```
+
+The script creates a temporary, isolated build directory, fetches the exact pinned Leaf commit, applies the complete Paper/Leaf patch stack and Warext patches, compiles the server with the **local machine's JDK**, packages the fully patched source tree, verifies hashes and uploads the existing local JAR, ZIP and metadata to GitHub Releases. Temporary build files are deleted on exit. The binary is **not** built by GitHub.
+
+For the next development release increment `build-tools/VERSION` first, push the updated source to GitHub, then run the private local compiler to publish the new version. This policy applies to exp.27 onward; previously released exp.26 was built using the old GitHub Actions system.
+
+The compiler verifies the JAR's existence and checksums but does not establish production performance or plugin compatibility. Additional workload testing is independent from the compilation and release process.
 
 ## Licensing and attribution
 

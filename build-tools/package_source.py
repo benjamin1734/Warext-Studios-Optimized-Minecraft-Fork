@@ -34,7 +34,7 @@ def git_sha() -> str:
             stderr=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.CalledProcessError):
-        return "unknown"
+        return os.environ.get("WAREXT_FORK_COMMIT", "unknown")
 
 def iter_files(root: Path):
     for path, dirs, files in os.walk(root, topdown=True, followlinks=False):
@@ -71,7 +71,7 @@ def main() -> None:
         OUT, "w", compression=zipfile.ZIP_DEFLATED,
         compresslevel=6, allowZip64=True
     ) as archive:
-        for name in ("upstream-src", "build-tools", ".github"):
+        for name in ("upstream-src", "build-tools"):
             for item in iter_files(ROOT / name):
                 relative = item.relative_to(ROOT).as_posix()
                 archive.write(item, f"{PREFIX}/{relative}")
@@ -91,7 +91,7 @@ def main() -> None:
             f"Fork build commit: {git_sha()}\n"
             f"Pinned Leaf upstream: {UPSTREAM}\n"
             "Contents: patched Leaf/Paper Java sources, Gradle build scripts,\n"
-            "Warext performance patch engine, CI workflow and documentation.\n"
+            "Warext patch engine, private local compiler and documentation.\n"
             "Excluded: Git history, Gradle caches, generated class/JAR files,\n"
             "temporary test servers and other build artifacts.\n"
         )
