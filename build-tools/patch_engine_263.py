@@ -3640,9 +3640,9 @@ replace_once(
         // The default Balanced/Compatibility/Pregeneration profiles do not run
         // every optional async subsystem. Avoid reserving virtual CPU for
         // disabled subsystems when sizing low-priority background I/O.
-        final int paths = WarextPerformanceProfile.asyncPathfindingDefault()
+        final int paths = org.dreeam.leaf.config.modules.async.AsyncPathfinding.enabled
             ? pathfindingThreads() : 0;
-        final int trackers = WarextPerformanceProfile.asyncTrackerDefault()
+        final int trackers = org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled
             ? trackerThreads() : 0;
         return Math.max(0, workerBudget() - paths - trackers);
     }""",
@@ -3695,6 +3695,34 @@ replace_once(
     "async save follow-up drains reuse cached Runnable",
 )
 print("Stage 50: allocation-lean fair async save rescheduling applied.")
+
+# 51) Pathfinding overload: do not allocate an ArrayList sized to a saturated
+# executor queue merely to run it on the caller. Respect FLUSH_ALL semantics for
+# tasks already queued at the rejection instant. Cap loop to the initial queue
+# length so concurrently submitting workers cannot prolong the caller forever.
+replace_once(
+    "leaf-server/src/main/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java",
+    """                            List<Runnable> pendingTasks = new ArrayList<>(workQueue.size());
+
+                            workQueue.drainTo(pendingTasks);
+
+                            for (Runnable pendingTask : pendingTasks) {
+                                pendingTask.run();
+                            }""",
+    """                            // ArrayBlockingQueue#poll() is O(1) and does not allocate
+                            // a temporary list when the queue is saturated.
+                            final int queuedAtRejection = workQueue.size();
+                            for (int i = 0; i < queuedAtRejection; i++) {
+                                final Runnable pendingTask = workQueue.poll();
+                                if (pendingTask == null) {
+                                    break;
+                                }
+                                pendingTask.run();
+                            }""",
+    "pathfinding reject FLUSH_ALL without large temporary queue copy",
+)
+print("Stage 51: bounded allocation-free pathfinding overload flush applied.")
+
 
 
 
@@ -4932,8 +4960,14 @@ public class ChunkIoPendingWriteLimit extends ConfigModule {
     @Override
     public void onLoaded() {
         enabled = globalConfig.getBoolean(basePath() + ".enabled", enabled);
-        softLimit = Math.max(256, globalConfig.getInt(basePath() + ".soft-limit", softLimit));
-        hardLimit = Math.max(softLimit + 256, globalConfig.getInt(basePath() + ".hard-limit", Math.max(hardLimit, softLimit * 2)));
+        // Clamp user-supplied limits to sane integer-safe ranges. These bounds are
+        // safety ceilings, not assumptions about CPU cores, heap, or disk speed.
+        softLimit = Math.max(256, Math.min(16_777_216, globalConfig.getInt(
+            basePath() + ".soft-limit", softLimit
+        )));
+        hardLimit = Math.max(softLimit + 256, Math.min(33_554_432, globalConfig.getInt(
+            basePath() + ".hard-limit", Math.max(hardLimit, softLimit * 2)
+        )));
         maxExtraDrainsPerTurn = Math.max(1, Math.min(16, globalConfig.getInt(
             basePath() + ".max-extra-drains-per-turn",
             maxExtraDrainsPerTurn
@@ -4994,9 +5028,12 @@ guard_code = """    private boolean warext$drainOnePendingWrite() {
         if (size >= hard) {
             extraDrains = maxBurst;
         } else {
-            final int pressure = Math.max(1, size - soft);
-            final int span = Math.max(1, hard - soft);
-            extraDrains = 1 + (pressure * Math.max(0, maxBurst - 1) / span);
+            // Pending queues and administrator-configured limits may be large.
+            // Keep the interpolation in long arithmetic; int multiplication
+            // can overflow and accidentally disable the pressure guard.
+            final long pressure = Math.max(1L, (long) size - soft);
+            final long span = Math.max(1L, (long) hard - soft);
+            extraDrains = 1 + (int) (pressure * Math.max(0, maxBurst - 1) / span);
             extraDrains = Math.min(maxBurst, extraDrains);
         }
 

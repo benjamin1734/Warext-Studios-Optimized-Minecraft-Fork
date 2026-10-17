@@ -28,6 +28,10 @@ git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
 FORK_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 gh auth status >/dev/null 2>&1 ||
     die "Private compiler needs authenticated GitHub CLI for Releases storage"
+# Publish only a source commit already pushed to the canonical GitHub store.
+PUSHED_COMMIT="$(gh api "repos/$REPO/commits/$FORK_COMMIT" --jq '.sha' 2>/dev/null)" ||
+    die "Source commit $FORK_COMMIT is not in GitHub; push source first"
+[[ "$PUSHED_COMMIT" == "$FORK_COMMIT" ]] || die "Remote source SHA mismatch"
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     die "Release $TAG exists; increment VERSION before publishing"
 fi
@@ -79,7 +83,12 @@ gh release create "$TAG" \
     --title "Warext Server Engine $VERSION" \
     --notes-file "$ROOT/RELEASE_NOTES.md" \
     --prerelease
-gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' |
-    grep -Fqx 'Warext-Server-Engine-26.3.jar' ||
-    die "Release verification failed; JAR missing"
-echo "[warext-local-build] Published $TAG; temporary files will be deleted."
+# Every release needs all four exact assets; a visible tag alone is insufficient.
+PUBLISHED_ASSETS="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')"
+for expected in     "Warext-Server-Engine-26.3.jar"     "$ZIP"     "SHA256SUMS.txt"     "UPSTREAM_COMMIT.txt"; do
+    printf '%s\n' "$PUBLISHED_ASSETS" | grep -Fqx "$expected" ||
+        die "Release verification failed; missing $expected"
+done
+ASSET_COUNT="$(printf '%s\n' "$PUBLISHED_ASSETS" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+[[ "$ASSET_COUNT" == 4 ]] || die "Release verification found unexpected number of assets: $ASSET_COUNT"
+echo "[warext-local-build] Published and verified $TAG; temporary files will be deleted."

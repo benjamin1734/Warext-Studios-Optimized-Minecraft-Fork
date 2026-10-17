@@ -5,7 +5,7 @@ High-performance Minecraft server engine focused on low MSPT, low p95/p99 tick l
 ## Current target
 - Minecraft line: 26.3
 - Java: 25
-- Release line: `26.3-exp.26` (previous published release; all **future** JARs are built on a private local builder, with GitHub used solely for source and Release storage)
+- Latest **published JAR**: `26.3-exp.26`. Current **source candidate**: `26.3-exp.27` (awaits private JDK25+ compilation and Release upload; no GitHub Actions builder).
 - Goal: minimize MSPT, p95/p99 tick latency, CPU time per tick, allocation/GC pressure and RAM use while preserving broad Paper ecosystem compatibility.
 
 ## Performance profiles
@@ -58,7 +58,7 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 ## Main optimization areas
 
 - Adaptive multi-core pathfinding, with preallocated bounded FIFO task queue storage (reduced per-task node allocations).
-- Shared CPU budgeting across async systems; background I/O headroom discounts optional async components disabled by the active performance profile.
+- Shared CPU budgeting across async systems; background I/O headroom honors the **actual enabled configuration** of pathfinding and tracker, not just their profile defaults.
 - NodeEvaluator generator/feature isolation with a bounded, constant-time atomic retention counter (eliminates O(n) concurrent-queue size checks in the hot return path).
 - Async entity-tracker context, snapshot, packet-buffer and interpolation allocation reductions.
 - Geometric reusable tracker Future/join buffers with active-count-only processing, avoiding per-tick array churn as entity task counts fluctuate.
@@ -69,9 +69,10 @@ The direct ticking-chunk set lookup from exp.19 is **disabled by default** at `p
 - Entity activation/despawn/natural-spawn spatial lookup allocation reductions.
 - Adaptive small-player linear nearest-player fast path.
 - ChunkCache p99 rehash-spike avoidance, plus cold sparse-clear array capacity reclamation to reduce retained heap and excessive array fills.
+- Overflow-safe 64-bit chunk NBT pending-write pressure interpolation and bounded I/O threshold configuration (pregeneration profile).
 - Collision buffer reuse.
 - Random-tick/precipitation lookup reuse.
-- Async path lifecycle cleanup and bounded path queues, with monotonic atomic rate-limited saturation diagnostics.
+- Async path lifecycle cleanup and bounded path queues, with monotonic atomic rate-limited saturation diagnostics and no temporary queue-copy allocation under optional FLUSH_ALL overload policy.
 - Entity encode-id caching.
 - Light packet ThreadLocal retention cleanup.
 - Hardware-adaptive scheduler defaults, balanced DAB defaults, Alternate Current defaults for new configs, and chunk-packet metadata allocation reductions.
@@ -94,7 +95,7 @@ The private/offline-from-GitHub compilation environment needs **JDK 25+**, Git, 
 bash build-tools/build-local.sh publish
 ```
 
-The script creates a temporary, isolated build directory, fetches the exact pinned Leaf commit, applies the complete Paper/Leaf patch stack and Warext patches, compiles the server with the **local machine's JDK**, packages the fully patched source tree, verifies hashes and uploads the existing local JAR, ZIP and metadata to GitHub Releases. Temporary build files are deleted on exit. The binary is **not** built by GitHub.
+The script creates a temporary, isolated build directory, fetches the exact pinned Leaf commit, applies the complete Paper/Leaf patch stack and Warext patches, compiles the server with the **local machine's JDK**, packages the fully patched source tree, verifies hashes and uploads the existing local JAR, ZIP and metadata to GitHub Releases. The local compiler requires the exact source commit to be pushed to GitHub and checks that **all four** Release assets were uploaded. Temporary build files are deleted on exit. The binary is **not** built by GitHub.
 
 For the next development release increment `build-tools/VERSION` first, push the updated source to GitHub, then run the private local compiler to publish the new version. This policy applies to exp.27 onward; previously released exp.26 was built using the old GitHub Actions system.
 
