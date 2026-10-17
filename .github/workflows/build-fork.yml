@@ -2,7 +2,7 @@ name: Build Warext Server Engine 26.3
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "update/leaf-26.3-build4" ]
     paths:
       - "build-tools/**"
       - ".github/workflows/build-fork.yml"
