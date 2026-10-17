@@ -38,3 +38,10 @@
 Build success is not evidence of faster MSPT. Benchmark identical worlds, plugins, online players, view/simulation distance, heap and CPUs with separate p50/p95/p99 MSPT, tick CPU time, GC pauses, heap usage, chunk generation speed and error logs. Do not declare a universal % improvement without these measurements.
 
 Primary evidence: https://github.com/Winds-Studio/Leaf/compare/0edc7f3...4b0dcd2 and https://www.leafmc.one/en/download/26.3
+
+## Build #4 integration verification — 2026-10-17
+
+- **Resolved actual upstream drift:** generated `PalettedContainer.read(FriendlyByteBuf)` now invokes `this.addPresetValues()` after `this.data = newData`, rather than the previous Paper palette-read `this.updateData(this.data)`. The Warext compact uniform-palette code now matches either upstream read tail, compacts before the anti-xray preset restoration, and preserves the Paper `addPresetValues()` call. A missing/ambiguous upstream anchor still fails closed with a targeted source excerpt; it is never silently skipped.
+- **Candidate GitHub Actions run:** https://github.com/benjamin1734/Warext-Studis-Optimized-Minecraft-Fork/actions/runs/39026189978 — all checks **passed**: pinned Leaf fetch and patch stack; Warext performance patches; Java 25 Paperclip build; release JAR and full patched-source ZIP packaging; balanced/extreme/pregeneration/compatibility profile, CPU adaptation, End/Aquifer generation, world save/reload, lazy container and experimental ticking-cache smoke steps in the workflow's combined smoke-test script.
+- No JAR/ZIP files created or retained locally: GitHub Actions performed source application and packaging. Candidate branch intentionally did not publish a Release. A separate post-merge `main` run must publish and verify the exp.21 release assets.
+- **Measurement limitation:** build and smoke-test success establish integration compatibility under these test cases, not superior TPS/MSPT/CPS. Wider plugin matrix and controlled Leaf-vs-Warext benchmarks remain outstanding.
