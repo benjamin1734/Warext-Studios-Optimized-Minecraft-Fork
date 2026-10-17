@@ -1,24 +1,26 @@
-# Warext Server Engine 26.3 exp.22
+# Warext Server Engine 26.3 exp.23
 
-Experimental Minecraft 26.3 performance and correctness update on Leaf build #4.
+Experimental performance maintenance on Leaf 26.3 build #4 (Paper/Moonrise), keeping the proven exp.22 async-save fairness scheduling.
 
-## Fair async-save scheduling
-- Previously a continuously updated world/player could drain all its coalesced snapshots in one I/O worker turn, starving unrelated save keys under sustained load.
-- The scheduler now executes **one write snapshot per queue turn** and re-enqueues the newest pending snapshot at the tail of the I/O queue. This provides fairness across players and worlds without changing per-key serialization, latest-snapshot coalescing or the completion future used by load/backup ordering.
-- Rejected reschedules are logged and fail the completion future instead of leaving a key silently stuck as scheduled.
-- Added an independent **real Java scheduler** smoke test: 1,000 superseded writes coalesce into one pending snapshot; a cold player's save runs before that latest hot snapshot; a failed task does not poison the worker; two I/O workers never overlap writes for the same key.
-- Preserve the configurable hardware-neutral I/O worker budget. No fixed CPU/RAM assumptions.
+## Constant-time, bounded async pathfinder evaluator pooling
+- Replaced an **O(n)** `ConcurrentLinkedQueue.size()` call in the hot `NodeEvaluatorCache.returnNodeEvaluator` path with an **O(1)** atomic retained-slot counter per generator/feature pool.
+- Use compare-and-set to reserve storage before offering a returned evaluator. Concurrent borrowers decrement after successful dequeue.
+- Keep the previous dynamic retained-pool cap: explicit `-Dwarext.pathfinding.evaluator-pool-cap=N` clamped 1..128; otherwise the worker-adjusted range of 4..32.
+- Preserve generator **identity** and evaluator feature isolation. Never introduce a global lock, ThreadLocal evaluator pool, or per-checkout expensive pool walks.
+- Drop surplus evaluators from burst pathfinding rather than retaining more than the configured memory budget.
+- Concurrent operations may briefly reserve a slot before queue insertion; this is a safe bounded-reuse tradeoff rather than a performance guarantee.
 
-## Upstream and compatibility
-- Remains pinned to Leaf 26.3 build #4, commit `4b0dcd264996f18b48f783c58390a9090ba1964b`.
-- Retains exp.21 Paper/Moonrise `PalettedContainer.read` anti-xray compatibility fix.
-- The JAR and complete patched Java source are produced and published through GitHub Actions only.
+## Regression test
+- Added a GitHub Actions test that uses `javac` to compile the **real generated patched** `NodeEvaluatorCache.java` against minimal API stubs and runs:
+  - 64 simultaneously checked-out evaluators and exact bounded retention at cap=4.
+  - Generator identity / feature-bit reuse isolation.
+  - Double-return and removed-object rejection.
+  - 12-worker, 18,000-operation simultaneous take/return stress, no duplicate checkouts, and counter/queue parity at quiescence.
+- Re-run exp.22 async save ordering/fairness Java regression, full Paperclip Java 25 build and existing startup, worldgen, and save/reload smoke tests.
 
-## Release validation
-- Apply exact pinned Leaf/Paper patch stack followed by all Warext patches.
-- Compile and run the Java async-save fairness/concurrency regression test directly against the **generated Java source**.
-- Build runnable Java 25 Paperclip JAR, package the complete modified source tree on GitHub Actions and check SHA256 sums.
-- Run balanced, extreme, pregeneration, compatibility, worldgen/save-reload, optional ticking-cache, and lazy container server smoke tests.
-- Publish exp.22 assets to GitHub Releases only after main workflow success.
+## Release
+- Pinned upstream: Leaf 26.3 build #4, `4b0dcd264996f18b48f783c58390a9090ba1964b`.
+- No fixed CPU or RAM assumptions.
+- Source and JAR are built, tested and published **only on GitHub Actions**; no user-side ZIP files.
 
-**Performance claim:** The fairness test proves deterministic I/O queue ordering and per-key isolation under its synthetic workload; it does not establish a universal TPS/MSPT uplift.
+**Measurement:** This removes an algorithmically linear operation and validates concurrency correctness, but does not prove a specific MSPT improvement relative to Leaf without controlled benchmarks.
