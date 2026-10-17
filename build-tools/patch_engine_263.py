@@ -3162,12 +3162,27 @@ replace_once(
 )
 
 node_cache = "leaf-server/src/main/java/org/dreeam/leaf/async/path/NodeEvaluatorCache.java"
+
+# ConcurrentLinkedQueue.size() is O(n) and returns only a racy estimate under
+# concurrent take/return. Avoid walking the whole evaluator pool on EVERY return.
+# Per-pool AtomicInteger tracks retention in O(1); CAS claims a slot before the
+# queue offer. A temporary reserved slot may reduce reuse, never exceed the cap.
+replace_once(
+    node_cache,
+    """import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;""",
+    """import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;""",
+    "evaluator pool atomic retention counter import",
+)
+
 replace_once(
     node_cache,
     """    private static final ConcurrentHashMap<PoolKey, ConcurrentLinkedQueue<NodeEvaluator>> NODE_EVALUATORS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<IdentityKey<NodeEvaluator>, ConcurrentLinkedQueue<NodeEvaluator>> NODE_EVALUATOR_TO_POOL = new ConcurrentHashMap<>();""",
-    """    private static final ConcurrentHashMap<PoolKey, ConcurrentLinkedQueue<NodeEvaluator>> NODE_EVALUATORS = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<IdentityKey<NodeEvaluator>, ConcurrentLinkedQueue<NodeEvaluator>> NODE_EVALUATOR_TO_POOL = new ConcurrentHashMap<>();
+    """    private static final ConcurrentHashMap<PoolKey, EvaluatorPool> NODE_EVALUATORS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<IdentityKey<NodeEvaluator>, EvaluatorPool> NODE_EVALUATOR_TO_POOL = new ConcurrentHashMap<>();
 
     private static int retainedPoolLimit() {
         final int configured = Integer.getInteger("warext.pathfinding.evaluator-pool-cap", 0);
@@ -3176,20 +3191,69 @@ replace_once(
         }
         final int threads = Math.max(1, org.dreeam.leaf.config.modules.async.AsyncPathfinding.asyncPathfindingMaxThreads);
         return Math.max(4, Math.min(32, threads * 2));
+    }
+
+    // One counter per generator+feature pool, avoiding O(n) CLQ.size() traversal
+    // on the high-frequency pathfinding return path.
+    private static final class EvaluatorPool {
+        private final ConcurrentLinkedQueue<NodeEvaluator> queue = new ConcurrentLinkedQueue<>();
+        private final AtomicInteger retained = new AtomicInteger();
+
+        NodeEvaluator poll() {
+            final NodeEvaluator evaluator = this.queue.poll();
+            if (evaluator != null) {
+                this.retained.decrementAndGet();
+            }
+            return evaluator;
+        }
+
+        void offer(final NodeEvaluator evaluator) {
+            final int limit = retainedPoolLimit();
+            int count = this.retained.get();
+            while (count < limit) {
+                if (this.retained.compareAndSet(count, count + 1)) {
+                    // Count reserves capacity first; concurrent polls cannot exceed the cap.
+                    this.queue.offer(evaluator);
+                    return;
+                }
+                count = this.retained.get();
+            }
+            // Drop burst evaluator rather than retaining it beyond the pool budget.
+        }
     }""",
-    "pathfinding evaluator retained-pool cap",
+    "constant-time bounded evaluator pooling with atomic slot reservation",
 )
 
 replace_once(
     node_cache,
-    """        Validate.notNull(pool, "NodeEvaluator already returned");
-        pool.offer(nodeEvaluator);""",
-    """        Validate.notNull(pool, "NodeEvaluator already returned");
-        if (pool.size() < retainedPoolLimit()) {
-            pool.offer(nodeEvaluator);
-        }""",
-    "discard excess burst evaluators",
+    """        final ConcurrentLinkedQueue<NodeEvaluator> pool =
+            NODE_EVALUATORS.computeIfAbsent(key, ignored -> new ConcurrentLinkedQueue<>());""",
+    """        final EvaluatorPool pool =
+            NODE_EVALUATORS.computeIfAbsent(key, ignored -> new EvaluatorPool());""",
+    "evaluator checkout uses per-key bounded pool",
 )
+
+replace_once(
+    node_cache,
+    """        final ConcurrentLinkedQueue<NodeEvaluator> previous =
+            NODE_EVALUATOR_TO_POOL.put(new IdentityKey<>(nodeEvaluator), pool);""",
+    """        final EvaluatorPool previous =
+            NODE_EVALUATOR_TO_POOL.put(new IdentityKey<>(nodeEvaluator), pool);""",
+    "evaluator checkout identity mapping to bounded pool",
+)
+
+replace_once(
+    node_cache,
+    """        final ConcurrentLinkedQueue<NodeEvaluator> pool =
+            NODE_EVALUATOR_TO_POOL.remove(new IdentityKey<>(nodeEvaluator));""",
+    """        final EvaluatorPool pool =
+            NODE_EVALUATOR_TO_POOL.remove(new IdentityKey<>(nodeEvaluator));""",
+    "evaluator return identity mapping to bounded pool",
+)
+
+# Existing 'pool.offer(nodeEvaluator)' now executes O(1) AtomicInteger CAS rather
+# than an O(n) ConcurrentLinkedQueue.size() on the return hot path.
+print("[ok] constant-time evaluator retained-pool cap with generator identity isolation")
 
 print("Stage 16: pathfinding burst queue and evaluator retention limits applied.")
 
