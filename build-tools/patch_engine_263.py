@@ -4931,7 +4931,23 @@ compact_replacement = """            newData.palette.read(buffer, this.strategy.
 
             this.updateData(this.data); // Paper - optimise palette reads"""
 if data.count(compact_anchor) != 1:
-    raise RuntimeError(f"PalettedContainer compact storage anchor: expected 1 match, got {data.count(compact_anchor)}")
+    # Fail closed while exposing the generated Paper/Moonrise read method for safe adaptation.
+    lines = data.splitlines()
+    anchors = [
+        i for i, line in enumerate(lines)
+        if ("newData.palette.read" in line or "newData.storage.getRaw" in line
+            or "updateData(this.data)" in line or "readFixedSizeLongArray" in line)
+    ]
+    windows = []
+    for i in anchors[:12]:
+        lo = max(0, i - 12)
+        hi = min(len(lines), i + 17)
+        windows.append("\n".join(f"{j + 1}: {lines[j]}" for j in range(lo, hi)))
+    raise RuntimeError(
+        f"PalettedContainer compact storage anchor: expected 1 match, "
+        f"got {data.count(compact_anchor)}. Relevant source contexts:\n"
+        + "\n--- NEXT CONTEXT ---\n".join(windows)
+    )
 data = data.replace(compact_anchor, compact_replacement, 1)
 
 write(paletted, data)
