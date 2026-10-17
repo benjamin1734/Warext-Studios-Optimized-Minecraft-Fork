@@ -2171,7 +2171,7 @@ replace_once(
         return other;
     }
 
-    void handle(TrackerCtx[] other) {""",
+    void handle(TrackerCtx[] other, final int otherCount) {""",
     "tracker joins retain owning packet pools",
 )
 
@@ -2180,8 +2180,8 @@ replace_once(
     """        for (Object2ObjectOpenHashMap<ServerPlayerConnection, ObjectArrayList<Packet<?>>> otherPackets : other) {
             flush(world, otherPackets);
         }""",
-    """        for (TrackerCtx otherContext : other) {
-            otherContext.flushPackets();
+    """        for (int i = 0; i < otherCount; i++) {
+            other[i].flushPackets();
         }""",
     "tracker flushes through owning contexts",
 )
@@ -3280,9 +3280,13 @@ replace_once(
         Future<TrackerCtx>[] futures = new Future[taskCount];
 
         int cursor = 0;""",
-    """        if (this.futureBuffer.length != taskCount) {
+    """        if (this.futureBuffer.length < taskCount) {
+            int capacity = Math.max(4, this.futureBuffer.length);
+            while (capacity < taskCount) {
+                capacity <<= 1;
+            }
             @SuppressWarnings("unchecked")
-            Future<TrackerCtx>[] resized = new Future[taskCount];
+            Future<TrackerCtx>[] resized = new Future[capacity];
             this.futureBuffer = resized;
         }
         final Future<TrackerCtx>[] futures = this.futureBuffer;
@@ -3376,14 +3380,18 @@ replace_once(
         try {
             TrackerCtx ctx = futures[0].get();
             final int joinedCount = count - 1;
-            if (this.joinBuffer.length != joinedCount) {
-                this.joinBuffer = new TrackerCtx[joinedCount];
+            if (this.joinBuffer.length < joinedCount) {
+                int capacity = Math.max(4, this.joinBuffer.length);
+                while (capacity < joinedCount) {
+                    capacity <<= 1;
+                }
+                this.joinBuffer = new TrackerCtx[capacity];
             }
             final TrackerCtx[] contexts = this.joinBuffer;
             for (int i = 1; i < count; i++) {
                 contexts[i - 1] = ctx.join(futures[i].get());
             }
-            ctx.handle(contexts);
+            ctx.handle(contexts, joinedCount);
 
             for (int i = 0; i < count; i++) {
                 TrackerCtx completed = futures[i].get();
@@ -3391,7 +3399,8 @@ replace_once(
                 completed.reset();
                 this.trackerCtxPool.addLast(completed);
             }
-            java.util.Arrays.fill(contexts, null);
+            // Drop references from only the active slice; retain backing capacity.
+            java.util.Arrays.fill(contexts, 0, joinedCount, null);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (final ExecutionException e) {
@@ -3488,6 +3497,74 @@ replace_once(
     "tracker oversized packet-list retention guard",
 )
 print("Stage 44: tracker snapshot shrink cleanup and bounded packet-list retention applied.")
+
+# 45) Async pathfinding saturation: rate-limit logger contention with a
+# lock-free CAS and monotonic time instead of racy non-volatile timestamps.
+# On heavily saturated servers each rejected task may run on a caller thread;
+# only one logger warning every 30 seconds is necessary across all workers.
+path_processor = "leaf-server/src/main/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java"
+replace_once(
+    path_processor,
+    """    private static long lastWarnMillis = System.currentTimeMillis();""",
+    """    private static final java.util.concurrent.atomic.AtomicLong LAST_WARN_NANOS =
+        new java.util.concurrent.atomic.AtomicLong(System.nanoTime());""",
+    "pathfinding lock-free monotonic warning timestamp",
+)
+replace_once(
+    path_processor,
+    """            if (System.currentTimeMillis() - lastWarnMillis > 30000L) {
+                LOGGER.warn("Async pathfinding processor is busy! Pathfinding tasks will be treated as policy defined in config. Increasing max-threads in Leaf config may help.");
+                lastWarnMillis = System.currentTimeMillis();
+            }""",
+    """            final long now = System.nanoTime();
+            final long previous = LAST_WARN_NANOS.get();
+            if (now - previous >= TimeUnit.SECONDS.toNanos(30L)
+                && LAST_WARN_NANOS.compareAndSet(previous, now)) {
+                LOGGER.warn("Warext async pathfinding is saturated; review the queue capacity and worker budget if this persists.");
+            }""",
+    "pathfinding warn at most once per interval across worker threads",
+)
+print("Stage 45: CAS-limited pathfinding saturation warning applied.")
+
+# 46) ChunkCache: reclaim unusually large stale arrays on sparse explicit
+# clear() without causing hash-table rehash spikes during regular chunk removal.
+# Array fill is O(capacity), even if only a handful of chunks remain.
+# Clear() is a cold reset boundary, so rebuilding the initial capacity here
+# is safe and avoids walking huge mostly empty backing arrays.
+chunk_cache = "leaf-server/src/main/java/org/dreeam/leaf/world/ChunkCache.java"
+replace_once(
+    chunk_cache,
+    """        if (size == 0) return;
+        size = 0;
+        containsNullKey = false;
+        Arrays.fill(key, (0));
+        Arrays.fill(value, null);""",
+    """        // Shrink only at explicit sparse clear boundaries, never on hot-path
+        // remove(): mass unloading otherwise incurs p99 rehash spikes.
+        // Keep large capacity across normal clears while still actively dense,
+        // avoiding repetitive shrink/regrow for large working sets.
+        if (this.n >= MIN_N * 8 && this.size <= MIN_N / 2) {
+            this.size = 0;
+            this.containsNullKey = false;
+            this.n = MIN_N;
+            this.mask = MIN_N - 1;
+            this.maxFill = HashCommon.maxFill(MIN_N, FACTOR);
+            this.key = new long[MIN_N + 1];
+            @SuppressWarnings("unchecked")
+            final V[] freshValues = (V[]) new Object[MIN_N + 1];
+            this.value = freshValues;
+            return;
+        }
+        if (size == 0) return;
+        size = 0;
+        containsNullKey = false;
+        Arrays.fill(key, (0));
+        Arrays.fill(value, null);""",
+    "chunk cache cold sparse-clear capacity reclaim",
+)
+print("Stage 46: chunk cache sparse clear avoids O(huge capacity) fills and stale retained memory.")
+
+
 
 
 
