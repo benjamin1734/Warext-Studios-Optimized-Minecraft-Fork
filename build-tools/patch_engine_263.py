@@ -3650,6 +3650,53 @@ replace_once(
 )
 print("Stage 49: profile-aware shared CPU headroom for background I/O applied.")
 
+# 50) Async Save: preserve exp.22's per-key write fairness but avoid constructing
+# a fresh rescheduling lambda after every drained save. Each slot owns a stable
+# drain Runnable created once, then reused each time that slot is re-enqueued.
+async_save = "leaf-server/src/main/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java"
+replace_once(
+    async_save,
+    """    private static final class LatestTask {
+        private Runnable latest;
+        private boolean scheduled;
+        private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
+    }""",
+    """    private static final class LatestTask {
+        private Runnable latest;
+        private boolean scheduled;
+        private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
+        private final Runnable drain;
+
+        private LatestTask(final Object key) {
+            // A single reusable callback per outstanding player/world save key.
+            // It never escapes until the slot has been initialized and published.
+            this.drain = () -> drainLatest(key, this);
+        }
+    }""",
+    "async save stable per-key drain callback",
+)
+replace_once(
+    async_save,
+    """final LatestTask slot = existing == null ? new LatestTask() : existing;""",
+    """final LatestTask slot = existing == null ? new LatestTask(key) : existing;""",
+    "async save initialize drain callback with save key",
+)
+replace_once(
+    async_save,
+    """                    final LatestTask scheduledSlot = slot;
+                    IO_POOL.execute(() -> drainLatest(key, scheduledSlot));""",
+    """                    IO_POOL.execute(slot.drain);""",
+    "async save first drain reuses cached Runnable",
+)
+replace_once(
+    async_save,
+    """                    IO_POOL.execute(() -> drainLatest(key, slot));""",
+    """                    IO_POOL.execute(slot.drain);""",
+    "async save follow-up drains reuse cached Runnable",
+)
+print("Stage 50: allocation-lean fair async save rescheduling applied.")
+
+
 
 
 
