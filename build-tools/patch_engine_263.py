@@ -4930,6 +4930,20 @@ compact_replacement = """            newData.palette.read(buffer, this.strategy.
             }
 
             this.updateData(this.data); // Paper - optimise palette reads"""
+# Paper 26.3 #954 moved the post-read step from updateData(...) to
+# addPresetValues(). Keep anti-xray preset insertion AFTER Warext's logically
+# lossless uniform-storage compaction, regardless of the upstream variant.
+old_palette_tail = "            this.updateData(this.data); // Paper - optimise palette reads"
+new_palette_tail = (
+    "            this.addPresetValues(); // Paper - Anti-Xray - Add preset values "
+    "(inefficient, but this isn't used by the server)"
+)
+if data.count(compact_anchor) != 1:
+    current_palette_anchor = compact_anchor.replace(old_palette_tail, new_palette_tail)
+    if data.count(current_palette_anchor) == 1:
+        compact_anchor = current_palette_anchor
+        compact_replacement = compact_replacement.replace(old_palette_tail, new_palette_tail)
+
 if data.count(compact_anchor) != 1:
     # Fail closed while exposing the generated Paper/Moonrise read method for safe adaptation.
     lines = data.splitlines()
