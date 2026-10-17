@@ -1,31 +1,16 @@
-# Warext Server Engine 26.3 exp.26
+# Warext Server Engine 26.3 exp.27 — private build candidate
 
-Experimental multi-system optimization update. Pinned to Leaf 26.3 Build #4 and Paper/Moonrise from exp.21, preserving Warext improvements through exp.25. Java 25 remains the runtime baseline.
+This is a **source-only development candidate** until a private JDK 25+ compiler produces and publishes the runnable JAR plus source ZIP. Unlike exp.26 and earlier, no GitHub Actions compiler may be used.
 
-## Four optimization areas
+## Optimizations (source changes)
+1. **Chunk I/O:** Fixed signed 32-bit multiplication overflow in the pending-write pressure calculation using 64-bit interpolation. Configured pending-write soft and hard limits are bounded to 16,777,216 and 33,554,432 respectively, preventing integer overflow and implausibly large queue ceilings. Existing capped extra-drain turns and pregeneration-only default are unchanged.
+2. **Adaptive CPU budgeting:** Background save worker headroom now checks **actual configured enabled state** of AsyncPathfinding and MultithreadedTracker, not just the selected performance profile's defaults. Explicitly disabling either component no longer reserves a virtual budget for it; explicit worker overrides remain authoritative.
+3. **Pathfinding saturation:** When an administrator opts into `FLUSH_ALL`, the executor drains at most the number of queued tasks present at rejection using a bounded, allocation-free `poll()` loop, rather than allocating a temporary list proportional to the saturated queue. Caller-runs policy remains the default.
+4. **Private release integrity:** The local compilation/publish command now verifies the precise source commit exists on GitHub before building and confirms JAR, complete patched-source ZIP, checksums, and upstream metadata are all present in the published GitHub Release.
 
-### 1. Async Pathfinding / GC
-- Replace the bounded linked-list-backed pathfinding work queue (`LinkedBlockingQueue`) with a preallocated `ArrayBlockingQueue` of the **same configured capacity**.
-- Removes a newly allocated queue node for each enqueued path task while keeping bounded FIFO scheduling and existing overload/rejection policy semantics.
-- Under high contention array-backed queues may trade allocation reduction for a single lock; **no blanket TPS/MSPT gain claimed**.
+## Unchanged principles
+- Minecraft 26.3, **Java 25** and pinned Leaf Build #4 commit `4b0dcd264996f18b48f783c58390a9090ba1964b`.
+- No fixed CPU/RAM assumptions or new performance-test development.
+- GitHub is **source storage and compiled Release artifact storage only**. JAR compilation runs in the private local environment and uses the repository's `build-tools/build-local.sh publish`. GitHub Actions is disabled.
 
-### 2. Async Entity Tracker memory after bursts
-- The seven reusable per-context `ObjectArrayList` buffers are trimmed **only after a quiet tick** follows an exceptionally large burst.
-- Preserves burst-sized backing arrays while workload remains high to avoid repeated trim/grow allocation cycles.
-- `-Dwarext.tracker.context-list-trim-threshold=N` optionally sets the capacity threshold (default 4096, clamped 512–65536); quiet lists are trimmed to 256 slots.
-- Snapshot stale-reference cleanup, capped packet batch arrays and geometric future/join buffers from exp.24–25 remain intact.
-
-### 3. Adaptive CPU scheduling / save workers
-- Background I/O headroom now accounts for optional pathfinder and entity tracker defaults **only when their performance profile enables them**.
-- Balanced no longer reserves CPU for the extreme-only async tracker; pregeneration no longer reserves workers for either default-disabled subsystem.
-- Actual I/O worker count remains conservative, max 2 by auto policy, with explicit `warext.cpu.io-workers` override retained. Per-server CPU quotas and custom thread overrides remain applicable; no fixed core or RAM assumption.
-
-### 4. Asynchronous data saves / allocation
-- Reuse one stable `Runnable` per active player/world save key when rescheduling the next coalesced snapshot.
-- Avoid per-reschedule lambda allocation while retaining exp.22's one-write-per-queue-turn fairness, latest-snapshot merging, per-key exclusion and completion-future semantics.
-
-## Publishing
-- No new benchmark/test systems are written for exp.26, as requested.
-- Existing GitHub Actions patch application, Java scheduler/evaluator regression checks, complete Paperclip Java 25 build, source ZIP packaging, and multiple server-profile/worldgen/save smoke gates **remain required before release**.
-- JAR, full patched Java sources and checksum/metadata files are produced only in GitHub Actions and published in GitHub Releases.
-- No numerical performance improvements or production-readiness are claimed without controlled comparison against the same Leaf baseline.
+**Release status:** Do not label exp.27 as built, tested or released until the external local JDK 25+ environment has actually built the JAR and the GitHub Release lists all four assets. Existing published exp.26 remains the last downloadable version until then.
