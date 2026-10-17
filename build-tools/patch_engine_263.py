@@ -1012,18 +1012,15 @@ public class AsyncPlayerDataSaving {
     }
 
     private static void drainLatest(final Object key, final LatestTask slot) {
-        while (true) {
-            final Runnable task;
-            synchronized (slot) {
-                task = slot.latest;
-                slot.latest = null;
-                if (task == null) {
-                    slot.scheduled = false;
-                    slot.completion.complete(null);
-                    break;
-                }
-            }
+        // Execute at most ONE snapshot per queue turn. A hot player/world must not
+        // monopolize the I/O worker while unrelated player saves wait behind it.
+        final Runnable task;
+        synchronized (slot) {
+            task = slot.latest;
+            slot.latest = null;
+        }
 
+        if (task != null) {
             try {
                 task.run();
             } catch (Throwable throwable) {
@@ -1031,7 +1028,27 @@ public class AsyncPlayerDataSaving {
             }
         }
 
-        // Remove idle slots without racing a new submit for the same key.
+        synchronized (slot) {
+            if (slot.latest != null) {
+                // Yield to the executor queue, retaining one writer per key and
+                // the SAME completion future until the newest snapshot is durable.
+                try {
+                    IO_POOL.execute(() -> drainLatest(key, slot));
+                    return;
+                } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                    slot.latest = null;
+                    slot.scheduled = false;
+                    slot.completion.completeExceptionally(rejected);
+                    LOGGER.error("Could not reschedule async save for key {}", key, rejected);
+                }
+            } else {
+                slot.scheduled = false;
+                slot.completion.complete(null);
+            }
+        }
+
+        // Removal is atomic with submitLatest's per-key compute; a concurrent
+        // replacement always keeps the slot instead of losing its pending write.
         LATEST_TASKS.compute(key, (ignored, current) -> {
             if (current != slot) {
                 return current;
