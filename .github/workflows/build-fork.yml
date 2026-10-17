@@ -2,7 +2,7 @@ name: Build Warext Server Engine 26.3
 
 on:
   push:
-    branches: [ "main", "development/async-save-fairness-exp22" ]
+    branches: [ "main", "development/path-evaluator-constant-time-exp23" ]
     paths:
       - "build-tools/**"
       - ".github/workflows/build-fork.yml"
@@ -55,6 +55,9 @@ jobs:
 
       - name: Verify async-save fairness and per-key save ordering
         run: python3 build-tools/test_async_save_fairness.py
+
+      - name: Verify bounded constant-time path evaluator pooling
+        run: python3 build-tools/test_node_evaluator_pool.py
 
       - name: Build Paperclip JAR
         working-directory: upstream-src
