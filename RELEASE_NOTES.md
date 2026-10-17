@@ -1,29 +1,31 @@
-# Warext Server Engine 26.3 exp.25
+# Warext Server Engine 26.3 exp.26
 
-Experimental performance update on the Leaf 26.3 Build #4 base. This release groups improvements in **three different core subsystems** rather than using one version for one minor change.
+Experimental multi-system optimization update. Pinned to Leaf 26.3 Build #4 and Paper/Moonrise from exp.21, preserving Warext improvements through exp.25. Java 25 remains the runtime baseline.
 
-## 1. Entity Tracker — allocation stability across variable entity counts
-- Future and join-context arrays now grow geometrically only when their **capacity** is insufficient, instead of being reallocated every time the entity task count changes.
-- Existing `futureCount` is authoritative: reused over-capacity Future arrays never schedule or join inactive slots.
-- `TrackerCtx.handle` takes an explicit active joined-context count and flushes only populated entries rather than iterating the full allocated capacity.
-- After handling, only the active joined-context references are cleared; reused arrays do not pin entity tracker contexts, and capacity is retained for future ticks.
-- Existing exp.24 snapshot tail cleanup and bounded packet-list retention remain enabled.
+## Four optimization areas
 
-## 2. ChunkCache — cold sparse clear memory and CPU policy
-- The existing hot chunk removal path stays **free of shrink rehashes**, preserving protection from sudden mass-unload p99 spikes.
-- An explicit `ChunkCache.clear()` when table capacity exceeds eight times its initial capacity **and** fewer than half of initial-capacity entries remain reclaims the oversized key/value arrays.
-- This replaces an O(huge capacity) clear on sparse maps with freshly allocated initial-capacity arrays; normal dense clears keep the capacity to avoid excessive shrink/regrow cycles.
-- The single-entry cache and null-key flags are invalidated as before.
+### 1. Async Pathfinding / GC
+- Replace the bounded linked-list-backed pathfinding work queue (`LinkedBlockingQueue`) with a preallocated `ArrayBlockingQueue` of the **same configured capacity**.
+- Removes a newly allocated queue node for each enqueued path task while keeping bounded FIFO scheduling and existing overload/rejection policy semantics.
+- Under high contention array-backed queues may trade allocation reduction for a single lock; **no blanket TPS/MSPT gain claimed**.
 
-## 3. Async Pathfinding — bounded saturation diagnostic cost
-- Replace a non-atomic shared warning timestamp with a monotonic `System.nanoTime()`-based AtomicLong CAS gate.
-- Under concurrent executor queue saturation, emit at most one warning per 30-second interval across worker/caller threads instead of redundant logging.
-- Preserve existing queue bounds, worker budget, user-configured rejection policy and path execution semantics.
+### 2. Async Entity Tracker memory after bursts
+- The seven reusable per-context `ObjectArrayList` buffers are trimmed **only after a quiet tick** follows an exceptionally large burst.
+- Preserves burst-sized backing arrays while workload remains high to avoid repeated trim/grow allocation cycles.
+- `-Dwarext.tracker.context-list-trim-threshold=N` optionally sets the capacity threshold (default 4096, clamped 512–65536); quiet lists are trimmed to 256 slots.
+- Snapshot stale-reference cleanup, capped packet batch arrays and geometric future/join buffers from exp.24–25 remain intact.
 
-## Delivery and compatibility
-- Keep pinned upstream Leaf Build #4 (`4b0dcd264996f18b48f783c58390a9090ba1964b`), the exp.23 O(1) evaluator pool, exp.22 async-save fairness, and exp.24 tracker memory improvements.
-- No fixed CPU count or heap size is assumed.
-- No new benchmark/test suites were developed for this release at the user's request. Existing GitHub Actions build and smoke gates remain mandatory.
-- On successful CI, publish **runnable JAR and full patched Java source** via GitHub Releases only.
+### 3. Adaptive CPU scheduling / save workers
+- Background I/O headroom now accounts for optional pathfinder and entity tracker defaults **only when their performance profile enables them**.
+- Balanced no longer reserves CPU for the extreme-only async tracker; pregeneration no longer reserves workers for either default-disabled subsystem.
+- Actual I/O worker count remains conservative, max 2 by auto policy, with explicit `warext.cpu.io-workers` override retained. Per-server CPU quotas and custom thread overrides remain applicable; no fixed core or RAM assumption.
 
-The changes reduce identifiable allocation and logging costs. No numeric MSPT/TPS/RAM improvement is claimed without controlled comparative measurements.
+### 4. Asynchronous data saves / allocation
+- Reuse one stable `Runnable` per active player/world save key when rescheduling the next coalesced snapshot.
+- Avoid per-reschedule lambda allocation while retaining exp.22's one-write-per-queue-turn fairness, latest-snapshot merging, per-key exclusion and completion-future semantics.
+
+## Publishing
+- No new benchmark/test systems are written for exp.26, as requested.
+- Existing GitHub Actions patch application, Java scheduler/evaluator regression checks, complete Paperclip Java 25 build, source ZIP packaging, and multiple server-profile/worldgen/save smoke gates **remain required before release**.
+- JAR, full patched Java sources and checksum/metadata files are produced only in GitHub Actions and published in GitHub Releases.
+- No numerical performance improvements or production-readiness are claimed without controlled comparison against the same Leaf baseline.

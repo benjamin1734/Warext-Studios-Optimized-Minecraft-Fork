@@ -3564,6 +3564,140 @@ replace_once(
 )
 print("Stage 46: chunk cache sparse clear avoids O(huge capacity) fills and stale retained memory.")
 
+# 47) Pathfinding: bounded array-backed queue avoids an allocated linked node
+# per enqueued path task. No rejection-ordering or configured capacity change.
+# On high-mob servers even tasks that are quickly dequeued otherwise create
+# garbage for each LinkedBlockingQueue offer.
+path_processor = "leaf-server/src/main/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java"
+replace_once(
+    path_processor,
+    """        return new LinkedBlockingQueue<>(queueCapacity);""",
+    """        // Preallocated storage: reduce queue-node allocations/GC on hot AI bursts.
+        // ArrayBlockingQueue preserves bounded FIFO and all reject-policy behavior.
+        return new java.util.concurrent.ArrayBlockingQueue<>(queueCapacity);""",
+    "allocation-free bounded pathfinding queue entries",
+)
+print("Stage 47: array-backed async path task scheduling applied.")
+
+# 48) TrackerCtx stores several reusable ObjectArrayList backing arrays. A rare
+# player-teleport / tracking burst may grow those lists to thousands of slots;
+# indefinitely keeping that peak memory in every pooled TrackerCtx is wasteful.
+# Trim only if the LAST tick was quiet: a sustained busy tracker never repeatedly
+# discards and regrows its buffers. The normal path does no new allocations.
+tracker_ctx = "leaf-server/src/main/java/org/dreeam/leaf/async/tracker/TrackerCtx.java"
+replace_once(
+    tracker_ctx,
+    """    public void reset() {
+        this.recyclePacketLists(false);
+        this.itemFrames.clear();
+        this.stopSeen.clear();
+        this.startSeen.clear();
+        this.resync.clear();
+        this.pluginEntity.clear();
+        this.syncAttributes.clear();
+        this.updateData.clear();
+    }""",
+    """    private static final int WAREXT_BURST_LIST_THRESHOLD = Math.max(
+        512, Math.min(65536, Integer.getInteger("warext.tracker.context-list-trim-threshold", 4096))
+    );
+
+    private static <E> void warext$clearBurstList(final ObjectArrayList<E> list) {
+        final int usedLastTick = list.size();
+        list.clear();
+        // Trim only after a quiet tick follows the spike to avoid reallocating
+        // these arrays under a sustained high-entity tracking workload.
+        if (usedLastTick <= 64 && list.elements().length > WAREXT_BURST_LIST_THRESHOLD) {
+            list.trim(256);
+        }
+    }
+
+    public void reset() {
+        this.recyclePacketLists(false);
+        warext$clearBurstList(this.itemFrames);
+        warext$clearBurstList(this.stopSeen);
+        warext$clearBurstList(this.startSeen);
+        warext$clearBurstList(this.resync);
+        warext$clearBurstList(this.pluginEntity);
+        warext$clearBurstList(this.syncAttributes);
+        warext$clearBurstList(this.updateData);
+    }""",
+    "release idle tracker context list burst arrays without sustained workload churn",
+)
+print("Stage 48: burst-aware tracker context buffer memory release applied.")
+
+# 49) Worker budgeting: the previous headroom calculation always reserved a
+# hypothetical async tracker and pathfinder, including normal balanced mode
+# (tracker disabled) and offline pregeneration (both disabled). Account for
+# profile-enabled components when allocating the remaining async save workers.
+# User CPU overrides still take precedence in all subsystem worker getters.
+budget_file = "leaf-server/src/main/java/org/dreeam/leaf/performance/WarextCpuBudget.java"
+replace_once(
+    budget_file,
+    """    public static int backgroundHeadroom() {
+        return Math.max(0, workerBudget() - pathfindingThreads() - trackerThreads());
+    }""",
+    """    public static int backgroundHeadroom() {
+        // The default Balanced/Compatibility/Pregeneration profiles do not run
+        // every optional async subsystem. Avoid reserving virtual CPU for
+        // disabled subsystems when sizing low-priority background I/O.
+        final int paths = WarextPerformanceProfile.asyncPathfindingDefault()
+            ? pathfindingThreads() : 0;
+        final int trackers = WarextPerformanceProfile.asyncTrackerDefault()
+            ? trackerThreads() : 0;
+        return Math.max(0, workerBudget() - paths - trackers);
+    }""",
+    "background I/O budget excludes profile-disabled async subsystems",
+)
+print("Stage 49: profile-aware shared CPU headroom for background I/O applied.")
+
+# 50) Async Save: preserve exp.22's per-key write fairness but avoid constructing
+# a fresh rescheduling lambda after every drained save. Each slot owns a stable
+# drain Runnable created once, then reused each time that slot is re-enqueued.
+async_save = "leaf-server/src/main/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java"
+replace_once(
+    async_save,
+    """    private static final class LatestTask {
+        private Runnable latest;
+        private boolean scheduled;
+        private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
+    }""",
+    """    private static final class LatestTask {
+        private Runnable latest;
+        private boolean scheduled;
+        private CompletableFuture<Void> completion = CompletableFuture.completedFuture(null);
+        private final Runnable drain;
+
+        private LatestTask(final Object key) {
+            // A single reusable callback per outstanding player/world save key.
+            // It never escapes until the slot has been initialized and published.
+            this.drain = () -> drainLatest(key, this);
+        }
+    }""",
+    "async save stable per-key drain callback",
+)
+replace_once(
+    async_save,
+    """final LatestTask slot = existing == null ? new LatestTask() : existing;""",
+    """final LatestTask slot = existing == null ? new LatestTask(key) : existing;""",
+    "async save initialize drain callback with save key",
+)
+replace_once(
+    async_save,
+    """                    final LatestTask scheduledSlot = slot;
+                    IO_POOL.execute(() -> drainLatest(key, scheduledSlot));""",
+    """                    IO_POOL.execute(slot.drain);""",
+    "async save first drain reuses cached Runnable",
+)
+replace_once(
+    async_save,
+    """                    IO_POOL.execute(() -> drainLatest(key, slot));""",
+    """                    IO_POOL.execute(slot.drain);""",
+    "async save follow-up drains reuse cached Runnable",
+)
+print("Stage 50: allocation-lean fair async save rescheduling applied.")
+
+
+
 
 
 

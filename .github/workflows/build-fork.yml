@@ -2,7 +2,7 @@ name: Build Warext Server Engine 26.3
 
 on:
   push:
-    branches: [ "main", "development/multi-system-throughput-exp25" ]
+    branches: [ "main", "development/allocation-pressure-exp26" ]
     paths:
       - "build-tools/**"
       - ".github/workflows/build-fork.yml"
